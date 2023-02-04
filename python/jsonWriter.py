@@ -1,14 +1,15 @@
 #!/bin/env python3
 import os, json, time
 
-TOTAL = 100
+TOTAL = 500
 FIFO = f"/tmp/{os.getlogin()}/progress.pipe"
 PID = os.getpid()
 
 init = {
     "pid": PID,
     "total": TOTAL,
-    "desc": "test"
+    "desc": "DummyTaskName",
+    "status": "Running"
 }
 
 update = {
@@ -18,7 +19,7 @@ update = {
 
 complete = {
     "pid": PID,
-    "desc": "complete"
+    "status": "Complete!"
 }
 
 print(f"Writing to {FIFO}...")
@@ -29,7 +30,7 @@ for i in range(TOTAL):
     fifo = open(FIFO, "w")
     json.dump(update, fifo)
     fifo.write("\n")
-    time.sleep(0.1)
+    time.sleep(0.01)
 json.dump(complete, fifo)
 fifo.write("\n")
 fifo.close()

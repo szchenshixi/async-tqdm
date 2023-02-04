@@ -20,7 +20,7 @@ class AsyncTqdm {
   public:
     AsyncTqdm(float minInterval = 0,
               std::string fifoPath = (std::string) "/tmp/" + getlogin() +
-                                 (std::string) "/progress.pipe")
+                                     (std::string) "/progress.pipe")
         : mPid(getpid())
         , mMinInterval(minInterval)
         , mTotalUpdateAmount(0)
@@ -48,7 +48,7 @@ class AsyncTqdm {
         mFifoFile.flush();
     }
 
-    void update(int n = 1, bool force = false) {
+    void update(int n = 1, bool immediately = false) {
         if (!mFifoFile.is_open()) {
             return;
         }
@@ -61,7 +61,7 @@ class AsyncTqdm {
         constexpr int SEC_TO_NANOSEC = 1e6;
         if (std::chrono::duration_cast<std::chrono::nanoseconds>(interval)
                 .count() > long(mMinInterval * SEC_TO_NANOSEC) ||
-            force) {
+            immediately) {
             std::string toSend = constructUpdateCmd(mPid, n);
             mFifoFile.write(toSend.c_str(), (long)toSend.length());
             mFifoFile.flush();
@@ -69,12 +69,28 @@ class AsyncTqdm {
         }
     }
 
-    void complete(const std::string& desc) {
+    /**
+     * @brief Update the progress to 100% and change the status to Complete
+     */
+    void complete() {
         if (!mFifoFile.is_open()) {
             return;
         }
         update((int)mTotal - mTotalUpdateAmount + mNextUpdateAmount, true);
-        std::string toSend = constructCompleteCmd(mPid, desc);
+        std::string toSend = constructStatusCmd(mPid, "Complete!");
+        mFifoFile.write(toSend.c_str(), (long)toSend.length());
+        mFifoFile.flush();
+    }
+
+    /**
+     * @brief Keep progress to its current reading and change the status to
+     * Terminated
+     */
+    void terminate() {
+        if (!mFifoFile.is_open()) {
+            return;
+        }
+        std::string toSend = constructStatusCmd(mPid, "Terminated");
         mFifoFile.write(toSend.c_str(), (long)toSend.length());
         mFifoFile.flush();
     }
@@ -100,6 +116,7 @@ class AsyncTqdm {
         oss << "{ \"pid\": " << pid;
         oss << ", \"total\": " << total;
         oss << ", \"desc\": \"" << desc << "\"";
+        oss << ", \"status\": \"Running\"";
         oss << " }\n";
         return oss.str();
     }
@@ -121,16 +138,16 @@ class AsyncTqdm {
     }
 
     /**
-     * @brief Construct the text-based COMPLETE command sent to the monitor
+     * @brief Construct the text-based STATUS command sent to the monitor
      *
      * @param pid Process id as the identifier
      * @param desc Description message to be shown besides the progress bar
      */
-    static std::string constructCompleteCmd(pid_t pid,
-                                            const std::string& desc) {
+    static std::string constructStatusCmd(pid_t pid,
+                                          const std::string& newStatus) {
         std::ostringstream oss;
         oss << "{ \"pid\": " << pid;
-        oss << ", \"desc\": \"" << desc << "\"";
+        oss << ", \"status\": \"" << newStatus << "\"";
         oss << " }\n";
         return oss.str();
     }

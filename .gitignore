@@ -4,3 +4,6 @@ __pycache__/
 # Temporary files generated after importing the monitor.py in Jupyter
 *.ipynb
 .ipynb_checkpoints/
+
+# Any file that has no "dot" symbol. Mainly binaries
+[^\.]*

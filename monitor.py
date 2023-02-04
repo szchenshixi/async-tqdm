@@ -29,21 +29,27 @@ FIFO = f"/tmp/{os.getlogin()}/progress.pipe"
 
 
 def update(jsonObj: Dict[int, tqdm]):
-    pid = jsonObj.get("pid", None)
+    pid = jsonObj.get("pid", None)  # Identifier of the progress bar
     total = jsonObj.get("total", None)
     desc = jsonObj.get("desc", None)
+    status = jsonObj.get("status", None)
     n = jsonObj.get("n", 1)
 
     b = "{desc} {bar}{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
     if pBars.get(pid) is None:
         pBars[pid] = tqdm(total=total,
                           desc=desc,
+                          postfix=status,
                           bar_format=b,
                           dynamic_ncols=True)  # Allowing for window resizes
         return
-    elif desc != None:
-        pBars[pid].set_description(desc=desc)
-    pBars[pid].update(n=n)
+    #  if desc != None:
+    #      pBars[pid].set_description(desc=desc)
+    elif status != None:
+        pBars[pid].set_postfix_str(status)
+        return
+    else:
+        pBars[pid].update(n=n)
 
 
 os.makedirs(os.path.dirname(FIFO), exist_ok=True)
