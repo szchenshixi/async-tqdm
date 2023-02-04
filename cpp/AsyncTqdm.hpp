@@ -9,16 +9,26 @@
 #include <string>
 #include <unistd.h>
 
+// File-related variables' naming style I propose:
+// For /a/b/c/some.txt
+// someDir: /a/b/c
+// someFile: the file handle of some.txt
+// somePath: /a/b/c/some.txt (most path libraries can directly manipulate)
+// someFileName: some.txt
+
 class AsyncTqdm {
   public:
-    AsyncTqdm(float minInterval = 0, std::string fifo = "/tmp/progress.pipe")
+    AsyncTqdm(float minInterval = 0,
+              std::string fifoPath = (std::string) "/tmp/" + getlogin() +
+                                 (std::string) "/progress.pipe")
         : mPid(getpid())
         , mMinInterval(minInterval)
         , mTotalUpdateAmount(0)
-        , mUpdateAmount(0)
-        , mkFifo(std::move(fifo))
+        , mNextUpdateAmount(0)
+        , mkFifoPath(std::move(fifoPath))
         , mTotal(0) {
-        mFifoFile.open(mkFifo, std::fstream::out);
+        // Blocking open
+        mFifoFile.open(mkFifoPath, std::fstream::out);
     }
 
     // I do not want to over complicate myself so only inplace use is allowed
@@ -46,7 +56,7 @@ class AsyncTqdm {
         auto interval = now - mLastUpdate;
         mLastUpdate = now;
         mTotalUpdateAmount += n;
-        mUpdateAmount += n;
+        mNextUpdateAmount += n;
 
         constexpr int SEC_TO_NANOSEC = 1e6;
         if (std::chrono::duration_cast<std::chrono::nanoseconds>(interval)
@@ -55,7 +65,7 @@ class AsyncTqdm {
             std::string toSend = constructUpdateCmd(mPid, n);
             mFifoFile.write(toSend.c_str(), (long)toSend.length());
             mFifoFile.flush();
-            mUpdateAmount = 0;
+            mNextUpdateAmount = 0;
         }
     }
 
@@ -63,10 +73,17 @@ class AsyncTqdm {
         if (!mFifoFile.is_open()) {
             return;
         }
-        update((int)mTotal - mTotalUpdateAmount + mUpdateAmount, true);
+        update((int)mTotal - mTotalUpdateAmount + mNextUpdateAmount, true);
         std::string toSend = constructCompleteCmd(mPid, desc);
         mFifoFile.write(toSend.c_str(), (long)toSend.length());
         mFifoFile.flush();
+    }
+
+    std::string getCurrentPipePath() {
+        if (!mFifoFile.is_open()) {
+            return "";
+        }
+        return mkFifoPath;
     }
 
   private:
@@ -118,16 +135,14 @@ class AsyncTqdm {
         return oss.str();
     }
 
-    const std::string mkFifoOut = "/tmp/progress.pipe";
     pid_t mPid;                  // Process id
     uint32_t mTotal;             // Max progress amount
     uint32_t mTotalUpdateAmount; // Accumulated progress amount
-    uint32_t mUpdateAmount;      // Amount to update at the next update call
+    uint32_t mNextUpdateAmount;  // Amount to update at the next update call
     float mMinInterval;          // Unit: second
     std::chrono::time_point<std::chrono::high_resolution_clock> mLastUpdate;
 
-    const std::string mkFifo;
-    ;
+    const std::string mkFifoPath; // Name of the named pipe
     std::ofstream mFifoFile;
 };
 

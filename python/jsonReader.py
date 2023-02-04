@@ -1,11 +1,14 @@
-import os
-import json
-import time
+#!/bin/env python3
+import os, json, time
+from contextlib import suppress
 
-FIFO = '/tmp/progress.pipe'
+FIFO = f"/tmp/{os.getlogin()}/progress.pipe"
 
-#  os.mkfifo(FIFO)
-while(True):
+with suppress(Exception):
+    os.mkfifo(FIFO)
+
+print(f"Reading from {FIFO}...")
+while (True):
     with open(FIFO, "r") as fifo:
         for line in fifo:
             try:

@@ -1,1 +1,6 @@
+# Temporary files gernerated after running python scripts
 __pycache__/
+
+# Temporary files generated after importing the monitor.py in Jupyter
+*.ipynb
+.ipynb_checkpoints/

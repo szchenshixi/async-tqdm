@@ -1,10 +1,8 @@
 #!/bin/env python3
-import os
-import json
-import time
+import os, json, time
 
 TOTAL = 100
-FIFO = "/tmp/progress.pipe"
+FIFO = f"/tmp/{os.getlogin()}/progress.pipe"
 PID = os.getpid()
 
 init = {
@@ -23,6 +21,7 @@ complete = {
     "desc": "complete"
 }
 
+print(f"Writing to {FIFO}...")
 fifo = open(FIFO, "w")
 json.dump(init, fifo)
 fifo.write("\n")
