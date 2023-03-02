@@ -1,14 +1,19 @@
 #ifndef ATQDM_H_
 #define ATQDM_H_
 #include <array>
+#include <assert.h>
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <limits.h>
 #include <poll.h>
 #include <sstream>
 #include <stdio.h>
 #include <string>
+#include <thread>
 #include <unistd.h>
 
 // File-related variables' naming style I propose:
@@ -18,29 +23,39 @@
 // somePath: /a/b/c/some.txt (most path libraries can directly manipulate)
 // someFileName: some.txt
 
+// Implementation of this class is based on the POSIX specification on pipe
+// "Atomicity of writes less than PIPE_BUF applies to pipes and FIFOs"
 class AsyncTqdm {
   public:
-    AsyncTqdm(float minInterval = 0,
+    AsyncTqdm(float minInterval = 0.1,
               std::string fifoPath = (std::string) "/tmp/" + getlogin() +
                                      (std::string) "/progress.pipe")
         : mkPid(getpid())
-        , mkMinInterval(minInterval)
+        , mkMinInterval(minInterval) // Seconds to refresh
         , mTotalUpdateAmount(0)
         , mNextUpdateAmount(0)
         , mkFifoPath(std::move(fifoPath))
+        , mLastUpdate(std::chrono::high_resolution_clock::now())
         , mHasCompleted(false)
         , mHasInitialized(false)
-        , mTotal(0) {
+        , mTotal(0)
+        , mRunning(true) {
         if (isNamedPipeListenedTo(mkFifoPath.c_str())) {
             // Named pipe is being listened to
             mFifoFile.open(mkFifoPath, std::fstream::out);
+            std::thread watchDog(&AsyncTqdm::watchDogThread, this);
+            watchDog.detach();
+            std::cout << "Progress bar enabled\n";
         } else {
             std::cout << mkFifoPath << " is not being listened to \n";
             std::cout << "Progress bar disabled\n";
         }
     }
 
-    ~AsyncTqdm() { terminate(); }
+    ~AsyncTqdm() {
+        terminate();
+        mRunning.store(false, std::memory_order_relaxed);
+    }
 
     // I do not want to over complicate myself so only inplace use is allowed
     AsyncTqdm(const AsyncTqdm&) = delete;
@@ -79,10 +94,45 @@ class AsyncTqdm {
         }
         mTotal = total;
         std::string toSend = constructInitCmd(mkPid, desc, total);
+        // "Atomicity of writes less than PIPE_BUF applies to pipes and FIFOs"
         mFifoFile.write(toSend.c_str(), (long)toSend.length());
         mFifoFile.flush();
         // Initialization guard
         mHasInitialized = true;
+    }
+
+    void watchDogThread() {
+        while (mRunning.load(std::memory_order_relaxed)) {
+            tryRefresh();
+            sleep((uint)mkMinInterval);
+        }
+    }
+
+    void tryRefresh() {
+        // There is no shared variable in this function. Thread safe
+        if (!mFifoFile.is_open() || !mHasInitialized || mHasCompleted) {
+            return;
+        }
+        auto now = std::chrono::high_resolution_clock::now();
+        static decltype(now) lastRefresh = now;  // assign only once
+        auto interval = now - lastRefresh;
+        constexpr int SEC_TO_NANOSEC = 1e9;
+        constexpr int ZERO_UPDATE = 0;
+        constexpr int UPDATE_RATE = 1.008;  // 1 time per second
+
+        // Debug
+        static int counter = 0;
+        if (std::chrono::duration_cast<std::chrono::nanoseconds>(interval)
+              .count() > long(SEC_TO_NANOSEC / UPDATE_RATE)) {
+            // Debug
+            counter = (counter + 1) % 100;
+            std::cout << "Watchdog update " << counter << std::endl;
+            // Zero update to force refresh on the progress bar
+            std::string toSend = constructUpdateCmd(mkPid, ZERO_UPDATE);
+            mFifoFile.write(toSend.c_str(), (long)toSend.length());
+            mFifoFile.flush();
+            lastRefresh = now;
+        }
     }
 
     void update(int64_t undateAmount = 1, bool immediately = false) {
@@ -91,17 +141,17 @@ class AsyncTqdm {
         }
         auto now = std::chrono::high_resolution_clock::now();
         auto interval = now - mLastUpdate;
-        mLastUpdate = now;
         mTotalUpdateAmount += undateAmount;
         mNextUpdateAmount += undateAmount;
 
-        constexpr int SEC_TO_NANOSEC = 1e6;
+        constexpr int SEC_TO_NANOSEC = 1e9;
         if (std::chrono::duration_cast<std::chrono::nanoseconds>(interval)
                 .count() > long(mkMinInterval * SEC_TO_NANOSEC) ||
             immediately) {
             std::string toSend = constructUpdateCmd(mkPid, mNextUpdateAmount);
             mFifoFile.write(toSend.c_str(), (long)toSend.length());
             mFifoFile.flush();
+            mLastUpdate = now;
             mNextUpdateAmount = 0;
         }
     }
@@ -120,6 +170,7 @@ class AsyncTqdm {
         mFifoFile.flush();
         // Completion guard
         mHasCompleted = true;
+        mRunning.store(false, std::memory_order_relaxed);
     }
 
     std::string getCurrentPipePath() {
@@ -142,6 +193,7 @@ class AsyncTqdm {
         std::string toSend = constructStatusCmd(mkPid, "Terminated");
         mFifoFile.write(toSend.c_str(), (long)toSend.length());
         mFifoFile.flush();
+        mRunning.store(false, std::memory_order_relaxed);
     }
     /**
      * @brief Construct the text-based INIT command sent to the monitor
@@ -158,6 +210,7 @@ class AsyncTqdm {
         oss << ", \"desc\": \"" << desc << "\"";
         oss << ", \"status\": \"Running\"";
         oss << " }\n";
+        assert(oss.str().length() < PIPE_BUF);
         return oss.str();
     }
 
@@ -174,6 +227,7 @@ class AsyncTqdm {
             oss << ", \"n\": " << updateAmount;
         }
         oss << " }\n";
+        assert(oss.str().length() < PIPE_BUF);
         return oss.str();
     }
 
@@ -189,15 +243,18 @@ class AsyncTqdm {
         oss << "{ \"pid\": " << pid;
         oss << ", \"status\": \"" << newStatus << "\"";
         oss << " }\n";
+        assert(oss.str().length() < PIPE_BUF);
         return oss.str();
     }
 
-    const pid_t mkPid;         // Process id
+    const pid_t mkPid;          // Process id
     int64_t mTotal;             // Max progress amount
     int64_t mTotalUpdateAmount; // Accumulated progress amount
     int64_t mNextUpdateAmount;  // Amount to update at the next update call
-    const float mkMinInterval; // Unit: second
-    std::chrono::time_point<std::chrono::high_resolution_clock> mLastUpdate;
+    const float mkMinInterval;  // Unit: second
+    std::chrono::time_point<std::chrono::high_resolution_clock>
+      mLastUpdate; // ? I spare a lock here, but should not be a problem
+    std::atomic_bool mRunning;
 
     bool mHasInitialized; // Has been initialized once
     bool mHasCompleted;   // Has been completed normally

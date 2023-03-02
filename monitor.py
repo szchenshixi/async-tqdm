@@ -1,5 +1,5 @@
 #!/bin/env python3
-import os, json, tempfile
+import os, json
 from typing import Dict
 from contextlib import suppress
 
@@ -35,19 +35,23 @@ def update(jsonObj: Dict[int, tqdm]):
     status = jsonObj.get("status", None)
     n = jsonObj.get("n", 1)
 
-    b = "{desc} {bar}{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
     if pBars.get(pid) is None:
+        b = "{desc}:{percentage:2.0f}% {bar}{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
         pBars[pid] = tqdm(total=total,
                           desc=desc,
                           postfix=status,
                           bar_format=b,
                           dynamic_ncols=True)  # Allowing for window resizes
+        if total < 0:
+            print("TOTAL is negative. Overflow detected.")
         return
     #  if desc != None:
     #      pBars[pid].set_description(desc=desc)
     elif status != None:
         pBars[pid].set_postfix_str(status)
         return
+    elif n == 0:
+        pBars[pid].refresh()
     else:
         pBars[pid].update(n=n)
 
@@ -59,9 +63,8 @@ with suppress(Exception):
 pBars: Dict[int, tqdm] = {}
 
 print(f"Start serving progress bar at {FIFO}")
-with suppress(Exception):
-    while (True):
-        with open(FIFO, "r") as progress:
-            for line in progress:
-                jsonObj = json.loads(line)  # Load string
-                update(jsonObj)
+while (True):
+    with open(FIFO, "r") as progress:
+        for line in progress:
+            jsonObj = json.loads(line)  # Load string
+            update(jsonObj)
